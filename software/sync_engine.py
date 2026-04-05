@@ -250,9 +250,17 @@ class SyncEngine:
 
         # Consolidar buffer
         if self._record_buffer:
-            self._recorded_audio = np.concatenate(self._record_buffer)
+            raw = np.concatenate(self._record_buffer)
+            # Recortar la latencia del input stream para alinear con el anchor
+            try:
+                latency_samples = int(self._input_stream.latency * SAMPLE_RATE)
+                print(f"[SyncEngine] Recortando {latency_samples} samples de latencia")
+                self._recorded_audio = raw[latency_samples:]
+            except Exception:
+                self._recorded_audio = raw
         else:
             self._recorded_audio = None
+        
         self._record_buffer = []
 
         # Notificar → main.py arrancará el playback
@@ -275,26 +283,50 @@ class SyncEngine:
 
     # ── Thread: playback ─────────────────────────────────────────────────
 
+
     def _run_playback(self):
-        audio = self._recorded_audio
+        audio        = self._recorded_audio
+        total_frames = len(audio)
+        position     = [0]
+
         self._set_state('PLAYING')
 
-        while not self._stop_event.is_set():
-            try:
-                sd.play(audio, SAMPLE_RATE)
-                sd.wait()
-            except Exception as e:
-                print(f"[SyncEngine] playback error: {e}")
-                break
+        def _callback(outdata, frames, time_info, status):
+            available = total_frames - position[0]
 
-            if self._stop_event.is_set():
-                break
+            if available >= frames:
+                outdata[:] = audio[position[0]:position[0] + frames]
+                position[0] += frames
+            else:
+                # Final del ciclo — copiar lo que queda
+                outdata[:available] = audio[position[0]:]
+                remaining = frames - available
 
-            # Comprobar si debemos parar al acabar este ciclo
-            with self._state_lock:
-                if self._state == 'STOPPING':
-                    break
+                with self._state_lock:
+                    should_stop = (self._state == 'STOPPING')
 
+                if should_stop:
+                    outdata[available:] = 0
+                    raise sd.CallbackStop()
+                else:
+                    # Loop sin gap: continuar desde sample 0
+                    outdata[available:] = audio[:remaining]
+                    position[0] = remaining
+
+        try:
+            with sd.OutputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                callback=_callback,
+                blocksize=256,
+                latency='low',
+                dtype='float32'
+            ) as stream:
+                while not self._stop_event.is_set() and stream.active:
+                    time.sleep(0.05)
+        except Exception as e:
+            print(f"[SyncEngine] playback error: {e}")
+    
         try:
             sd.stop()
         except Exception:
