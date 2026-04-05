@@ -10,3 +10,7 @@ __pyache__/
 *.pyd
 *.pyo
 __pycache__/
+# Archivos de cache de python
+__pycache__/
+*.py[cod]
+*.pyc

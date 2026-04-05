@@ -52,7 +52,7 @@ class SyncLooper:
         self.display = OledDisplay()
 
         self.engine.on_state_change = self._on_engine_state
-        self.engine.on_beat         = self._on_beat
+        #self.engine.on_beat         = self._on_beat Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
         self.engine.start_listening()
 
         self.exit_event = Event()
@@ -93,9 +93,9 @@ class SyncLooper:
         self._app_state = state
         self._update_display()
 
-    def _on_beat(self, beat_in_bar, beats_per_bar, bar, total_bars):
-        self._last_beat = (beat_in_bar, bar)
-        self._update_display()
+#    def _on_beat(self, beat_in_bar, beats_per_bar, bar, total_bars): Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
+#        self._last_beat = (beat_in_bar, bar)
+#        self._update_display()
         
     def _on_save(self):
         """GPIO 25 hold 2s → guardar clip en disco."""

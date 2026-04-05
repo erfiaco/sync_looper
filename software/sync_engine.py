@@ -208,7 +208,7 @@ class SyncEngine:
                 except Exception as e:
                     print(f"[SyncEngine] click error: {e}")
 
-                self._fire_beat(beat_in_bar, 0)
+                #self._fire_beat(beat_in_bar, 0) Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
                 self._wait_until(anchor + (i + 1) * interval)
 
             if self._stop_event.is_set():
@@ -238,7 +238,7 @@ class SyncEngine:
                 except Exception as e:
                     print(f"[SyncEngine] click error: {e}")
 
-            self._fire_beat(beat_in_bar, bar_num)
+            #self._fire_beat(beat_in_bar, bar_num) Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
             self._wait_until(anchor + (i + 1) * interval)
 
         self._grabando = False
