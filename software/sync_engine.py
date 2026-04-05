@@ -52,6 +52,11 @@ class SyncEngine:
         self.muted           = False
 
         self._input_stream = None
+        self._output_stream    = None
+        self._playback_audio   = None
+        self._playback_pos     = [0]
+        self._is_playing_audio = False
+        self._loop_stop        = False
 
         # Callbacks (asignados desde main.py)
         self.on_state_change = None   # fn(state: str)
@@ -78,9 +83,9 @@ class SyncEngine:
     # ── API pública ───────────────────────────────────────────────────────
 
     def start_listening(self):
-        """Stream de entrada siempre activo (listening permanente)."""
         if self._input_stream is not None:
             return
+
         self._input_stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
@@ -90,6 +95,17 @@ class SyncEngine:
             dtype='float32'
         )
         self._input_stream.start()
+
+        # OutputStream permanente — siempre corriendo, evita latencia de init
+        self._output_stream = sd.OutputStream(
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            callback=self._output_callback,
+            blocksize=256,
+            latency='low',
+            dtype='float32'
+        )
+        self._output_stream.start()
 
     def start_recording(self):
         """Para lo que haya en curso y lanza countdown → recording."""
@@ -103,33 +119,27 @@ class SyncEngine:
         self._thread.start()
 
     def start_playing(self):
-        """Lanza el loop de playback del clip grabado."""
         if self._recorded_audio is None:
             return
-        self._stop_and_join()
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run_playback,
-            daemon=True, name='sync-play'
-        )
-        self._thread.start()
+        self._playback_audio      = self._recorded_audio
+        self._playback_pos[0]     = 0
+        self._loop_stop           = False
+        self._is_playing_audio    = True
+        self._set_state('PLAYING')
 
     def schedule_stop(self):
-        """Programa parada al final del ciclo actual (solo desde PLAYING)."""
         with self._state_lock:
             if self._state == 'PLAYING':
                 self._state = 'STOPPING'
+                self._loop_stop = True
         if self.on_state_change:
             self.on_state_change('STOPPING')
 
     def stop_all(self):
-        """Para todo inmediatamente → IDLE."""
-        self._grabando = False
+        self._grabando         = False
+        self._is_playing_audio = False
+        self._loop_stop        = False
         self._stop_event.set()
-        try:
-            sd.stop()
-        except Exception:
-            pass
         self._stop_and_join()
         self._set_state('IDLE')
 
@@ -138,13 +148,15 @@ class SyncEngine:
 
     def close(self):
         self.stop_all()
-        if self._input_stream:
-            try:
-                self._input_stream.stop()
-                self._input_stream.close()
-            except Exception:
-                pass
-            self._input_stream = None
+        for stream in (self._input_stream, self._output_stream):
+            if stream:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+        self._input_stream  = None
+        self._output_stream = None
 
     # ── Helpers internos ──────────────────────────────────────────────────
 
@@ -184,6 +196,36 @@ class SyncEngine:
                else indata.copy().astype(np.float32)
         if self._grabando:
             self._record_buffer.append(data)
+    
+    
+    def _output_callback(self, outdata, frames, time_info, status):
+        if not self._is_playing_audio or self._playback_audio is None:
+            outdata[:] = 0
+            return
+
+        audio        = self._playback_audio
+        total_frames = len(audio)
+        pos          = self._playback_pos[0]
+        available    = total_frames - pos
+
+        if available >= frames:
+            outdata[:] = audio[pos:pos + frames]
+            self._playback_pos[0] += frames
+        else:
+            outdata[:available] = audio[pos:]
+            remaining = frames - available
+
+            if self._loop_stop:
+                outdata[available:] = 0
+                self._is_playing_audio = False
+                self._loop_stop = False
+                # Notificar IDLE desde fuera del callback
+                threading.Thread(
+                    target=self._set_state, args=('IDLE',), daemon=True
+                ).start()
+            else:
+                outdata[available:] = audio[:remaining]
+                self._playback_pos[0] = remaining    
 
     # ── Thread: countdown + recording ────────────────────────────────────
 
@@ -284,52 +326,3 @@ class SyncEngine:
     # ── Thread: playback ─────────────────────────────────────────────────
 
 
-    def _run_playback(self):
-        audio        = self._recorded_audio
-        total_frames = len(audio)
-        position     = [0]
-
-        self._set_state('PLAYING')
-
-        def _callback(outdata, frames, time_info, status):
-            available = total_frames - position[0]
-
-            if available >= frames:
-                outdata[:] = audio[position[0]:position[0] + frames]
-                position[0] += frames
-            else:
-                # Final del ciclo — copiar lo que queda
-                outdata[:available] = audio[position[0]:]
-                remaining = frames - available
-
-                with self._state_lock:
-                    should_stop = (self._state == 'STOPPING')
-
-                if should_stop:
-                    outdata[available:] = 0
-                    raise sd.CallbackStop()
-                else:
-                    # Loop sin gap: continuar desde sample 0
-                    outdata[available:] = audio[:remaining]
-                    position[0] = remaining
-
-        try:
-            with sd.OutputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                callback=_callback,
-                blocksize=256,
-                latency='low',
-                dtype='float32'
-            ) as stream:
-                while not self._stop_event.is_set() and stream.active:
-                    time.sleep(0.05)
-        except Exception as e:
-            print(f"[SyncEngine] playback error: {e}")
-    
-        try:
-            sd.stop()
-        except Exception:
-            pass
-
-        self._set_state('IDLE')
