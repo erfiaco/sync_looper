@@ -47,7 +47,8 @@ class SyncEngine:
         self._thread     = None
 
         self._recorded_audio = None   # np.ndarray (samples, 2)
-        self._record_buffer  = []
+        self._record_array   = None   # buffer pre-alocado para la grabación
+        self._record_pos     = 0      # frames escritos hasta ahora
         self._grabando       = False
         self.muted           = False
 
@@ -192,10 +193,14 @@ class SyncEngine:
     # ── Callback de audio input ───────────────────────────────────────────
 
     def _input_callback(self, indata, frames, time_info, status):
-        data = np.zeros_like(indata, dtype=np.float32) if self.muted \
-               else indata.copy().astype(np.float32)
-        if self._grabando:
-            self._record_buffer.append(data)
+        if self._grabando and self._record_array is not None:
+            end = self._record_pos + frames
+            if end <= len(self._record_array):
+                if self.muted:
+                    self._record_array[self._record_pos:end] = 0
+                else:
+                    self._record_array[self._record_pos:end] = indata[:frames]
+                self._record_pos = end
     
     
     def _output_callback(self, outdata, frames, time_info, status):
@@ -250,16 +255,20 @@ class SyncEngine:
                 except Exception as e:
                     print(f"[SyncEngine] click error: {e}")
 
-                #self._fire_beat(beat_in_bar, 0) Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
+                #self._fire_beat(beat_in_bar, 0) no se actualizara OLED 
                 self._wait_until(anchor + (i + 1) * interval)
-
+                
             if self._stop_event.is_set():
                 self._set_state('IDLE')
                 return
 
         # === RECORDING ===
+        # Pre-alojar buffer de tamaño exacto + margen de 1s por jitter
+        total_samples = int(self.total_bars * bpb * interval * SAMPLE_RATE) + SAMPLE_RATE
+        self._record_array = np.zeros((total_samples, CHANNELS), dtype=np.float32)
+        self._record_pos   = 0
+
         self._set_state('RECORDING')
-        self._record_buffer = []
         self._grabando = True
 
         total_beats = self.total_bars * bpb
@@ -280,30 +289,24 @@ class SyncEngine:
                 except Exception as e:
                     print(f"[SyncEngine] click error: {e}")
 
-            #self._fire_beat(beat_in_bar, bar_num) Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
+            #self._fire_beat(beat_in_bar, bar_num) Intentamos que no haya conflicto con i2C ya no se actualizara OLED
             self._wait_until(anchor + (i + 1) * interval)
 
         self._grabando = False
 
         if self._stop_event.is_set():
-            self._record_buffer = []
+            self._record_array = None
             self._set_state('IDLE')
             return
 
-        # Consolidar buffer
-        if self._record_buffer:
-            raw = np.concatenate(self._record_buffer)
-            # Recortar la latencia del input stream para alinear con el anchor
-            try:
-                latency_samples = int(self._input_stream.latency * SAMPLE_RATE)
-                print(f"[SyncEngine] Recortando {latency_samples} samples de latencia")
-                self._recorded_audio = raw[latency_samples:]
-            except Exception:
-                self._recorded_audio = raw
-        else:
-            self._recorded_audio = None
-        
-        self._record_buffer = []
+        # Sin concatenaciones: el audio ya está en el buffer contiguo
+        raw = self._record_array[:self._record_pos]
+        self._record_array = None
+        try:
+            latency_samples = int(self._input_stream.latency * SAMPLE_RATE)
+            self._recorded_audio = raw[latency_samples:]
+        except Exception:
+            self._recorded_audio = raw
 
         # Notificar → main.py arrancará el playback
         self._set_state('RECORDED')
