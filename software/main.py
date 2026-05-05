@@ -145,9 +145,10 @@ class SyncLooper:
         self._update_display()
 
     def _on_play(self):
-        # Solo tiene efecto en PLAYING: programa stop al final del ciclo
         if self._app_state == 'PLAYING':
             self.engine.schedule_stop()
+        elif self._app_state == 'IDLE' and self.engine.has_clip():
+            self.engine.start_playing()
 
     def _on_stop(self):
         if self._app_state == 'CONFIG':
