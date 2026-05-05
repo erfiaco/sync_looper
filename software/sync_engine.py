@@ -52,6 +52,12 @@ class SyncEngine:
         self._grabando       = False
         self.muted           = False
 
+        self._overdub_array    = None  # buffer overdub pre-alocado
+        self._overdub_pos      = 0
+        self._overdub_pending  = False  # esperando inicio de ciclo
+        self._is_overdubbing   = False  # grabando overdub ahora mismo
+        self._next_overdub     = False  # encolar otro overdub al terminar
+
         self._input_stream = None
         self._output_stream    = None
         self._playback_audio   = None
@@ -128,6 +134,18 @@ class SyncEngine:
         self._is_playing_audio    = True
         self._set_state('PLAYING')
 
+    def schedule_overdub(self):
+        """Programa un overdub al inicio del siguiente ciclo de reproducción.
+        Si ya hay un overdub en curso, encola uno más."""
+        with self._state_lock:
+            state = self._state
+        if state == 'PLAYING':
+            self._overdub_array   = np.zeros_like(self._recorded_audio)
+            self._overdub_pos     = 0
+            self._overdub_pending = True
+        elif state == 'OVERDUBBING':
+            self._next_overdub = True
+
     def schedule_stop(self):
         with self._state_lock:
             if self._state == 'PLAYING':
@@ -140,6 +158,10 @@ class SyncEngine:
         self._grabando         = False
         self._is_playing_audio = False
         self._loop_stop        = False
+        self._overdub_pending  = False
+        self._is_overdubbing   = False
+        self._next_overdub     = False
+        self._overdub_array    = None
         self._stop_event.set()
         self._stop_and_join()
         self._set_state('IDLE')
@@ -201,6 +223,14 @@ class SyncEngine:
                 else:
                     self._record_array[self._record_pos:end] = indata[:frames]
                 self._record_pos = end
+        elif self._is_overdubbing and self._overdub_array is not None:
+            end = self._overdub_pos + frames
+            if end <= len(self._overdub_array):
+                if self.muted:
+                    self._overdub_array[self._overdub_pos:end] = 0
+                else:
+                    self._overdub_array[self._overdub_pos:end] = indata[:frames]
+                self._overdub_pos = end
     
     
     def _output_callback(self, outdata, frames, time_info, status):
@@ -224,13 +254,22 @@ class SyncEngine:
                 outdata[available:] = 0
                 self._is_playing_audio = False
                 self._loop_stop = False
-                # Notificar IDLE desde fuera del callback
                 threading.Thread(
                     target=self._set_state, args=('IDLE',), daemon=True
                 ).start()
             else:
                 outdata[available:] = audio[:remaining]
-                self._playback_pos[0] = remaining    
+                self._playback_pos[0] = remaining
+
+                if self._is_overdubbing:
+                    self._is_overdubbing = False
+                    threading.Thread(target=self._finish_overdub, daemon=True).start()
+                elif self._overdub_pending:
+                    self._overdub_pending = False
+                    self._is_overdubbing  = True
+                    threading.Thread(
+                        target=self._set_state, args=('OVERDUBBING',), daemon=True
+                    ).start()
 
     # ── Thread: countdown + recording ────────────────────────────────────
 
@@ -301,15 +340,37 @@ class SyncEngine:
 
         # Sin concatenaciones: el audio ya está en el buffer contiguo
         raw = self._record_array[:self._record_pos]
-        self._record_array = None
+        self._record_array = None  # liberar el buffer pre-alocado (con margen)
         try:
             latency_samples = int(self._input_stream.latency * SAMPLE_RATE)
-            self._recorded_audio = raw[latency_samples:]
+            self._recorded_audio = raw[latency_samples:].copy()
         except Exception:
-            self._recorded_audio = raw
+            self._recorded_audio = raw.copy()
 
         # Notificar → main.py arrancará el playback
         self._set_state('RECORDED')
+
+    def _finish_overdub(self):
+        # Mezclar overdub en el clip grabado
+        od_len  = self._overdub_pos
+        rec     = self._recorded_audio
+        mixed   = rec.copy()
+        mix_len = min(od_len, len(mixed))
+        mixed[:mix_len] += self._overdub_array[:mix_len]
+        np.clip(mixed, -1.0, 1.0, out=mixed)
+
+        self._recorded_audio = mixed
+        self._playback_audio = mixed  # el output_callback ve el nuevo clip sin interrupción
+
+        if self._next_overdub:
+            self._next_overdub  = False
+            self._overdub_array = np.zeros_like(self._recorded_audio)
+            self._overdub_pos   = 0
+            self._is_overdubbing = True
+            self._set_state('OVERDUBBING')
+        else:
+            self._overdub_array = None
+            self._set_state('PLAYING')
 
     def save_clip(self, path):
         """Guarda el clip grabado en disco como WAV. Devuelve True si ok."""

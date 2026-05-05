@@ -23,11 +23,12 @@ class OledDisplay:
     """
 
     STATE_LABELS = {
-        'IDLE':      '■  IDLE',
-        'COUNTDOWN': '◎  COUNT',
-        'RECORDING': '●  REC',
-        'PLAYING':   '▶  PLAY',
-        'STOPPING':  '◑  ENDING...',
+        'IDLE':       '■  IDLE',
+        'COUNTDOWN':  '◎  COUNT',
+        'RECORDING':  '●  REC',
+        'PLAYING':    '▶  PLAY',
+        'STOPPING':   '◑  ENDING...',
+        'OVERDUBBING': '⊕  OVERDUB',
     }
 
     def __init__(self, port=1, address=0x3C, width=128, height=64):

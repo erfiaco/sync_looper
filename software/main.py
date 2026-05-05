@@ -132,9 +132,11 @@ class SyncLooper:
     def _on_rec(self):
         if self._app_state == 'CONFIG':
             return
+        if self._app_state in ('PLAYING', 'OVERDUBBING'):
+            self.engine.schedule_overdub()
+            return
         print(f"[Main] REC (estado={self._app_state})")
         self._last_beat = None
-        # Nueva grabación desde cualquier estado (borra el clip anterior)
         self.engine.start_recording()
 
     def _on_mute(self):
