@@ -51,7 +51,8 @@ class SyncLooper:
 
         self.engine  = SyncEngine(self.bpm, self.beats_per_bar, self.total_bars)
         self.display = OledDisplay()
-        self.metro   = MetroLed(self.bpm, self.beats_per_bar)
+        self.metro   = MetroLed(self.bpm, self.beats_per_bar, self.click_enabled,
+                               click_callback=self.engine.schedule_click)
 
         self.engine.on_state_change = self._on_engine_state
         #self.engine.on_beat         = self._on_beat Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
@@ -221,6 +222,7 @@ class SyncLooper:
         else:
             self.metro.bpm           = self.bpm
             self.metro.beats_per_bar = self.beats_per_bar
+            self.metro.click_enabled = self.click_enabled
             self.metro.start()
 
     def _apply_config(self):
@@ -230,6 +232,7 @@ class SyncLooper:
         self.engine.click_enabled = self.click_enabled
         self.metro.bpm            = self.bpm
         self.metro.beats_per_bar  = self.beats_per_bar
+        self.metro.click_enabled  = self.click_enabled
         print(f"[Main] Config → {self.bpm}BPM {self.beats_per_bar}/4 {self.total_bars}bars")
 
     # ── Display ───────────────────────────────────────────────────────────

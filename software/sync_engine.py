@@ -60,6 +60,9 @@ class SyncEngine:
 
         self._record_start_at  = None  # sync con metro: anchor del beat 1
 
+        self._click_audio = None  # tono a mezclar en el output
+        self._click_pos   = 0
+
         self._input_stream = None
         self._output_stream    = None
         self._playback_audio   = None
@@ -115,6 +118,8 @@ class SyncEngine:
             dtype='float32'
         )
         self._output_stream.start()
+        print(f"[SyncEngine] Input  latency: {self._input_stream.latency*1000:.1f} ms")
+        print(f"[SyncEngine] Output latency: {self._output_stream.latency*1000:.1f} ms")
 
     def start_recording(self, start_at=None):
         """Para lo que haya en curso y lanza countdown → recording.
@@ -168,6 +173,11 @@ class SyncEngine:
         self._overdub_array    = None
         self._stop_event.set()
         self._set_state('IDLE')  # inmediato, sin bloquear
+
+    def schedule_click(self, is_accent=True):
+        """Mezcla un click en el siguiente bloque del output. Thread-safe."""
+        self._click_audio = self._accent if is_accent else self._beat
+        self._click_pos   = 0
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -237,42 +247,52 @@ class SyncEngine:
     
     
     def _output_callback(self, outdata, frames, time_info, status):
-        if not self._is_playing_audio or self._playback_audio is None:
-            outdata[:] = 0
-            return
+        outdata[:] = 0
 
-        audio        = self._playback_audio
-        total_frames = len(audio)
-        pos          = self._playback_pos[0]
-        available    = total_frames - pos
+        # — Playback / loop —
+        if self._is_playing_audio and self._playback_audio is not None:
+            audio        = self._playback_audio
+            total_frames = len(audio)
+            pos          = self._playback_pos[0]
+            available    = total_frames - pos
 
-        if available >= frames:
-            outdata[:] = audio[pos:pos + frames]
-            self._playback_pos[0] += frames
-        else:
-            outdata[:available] = audio[pos:]
-            remaining = frames - available
-
-            if self._loop_stop:
-                outdata[available:] = 0
-                self._is_playing_audio = False
-                self._loop_stop = False
-                threading.Thread(
-                    target=self._set_state, args=('IDLE',), daemon=True
-                ).start()
+            if available >= frames:
+                outdata[:] = audio[pos:pos + frames]
+                self._playback_pos[0] += frames
             else:
-                outdata[available:] = audio[:remaining]
-                self._playback_pos[0] = remaining
+                outdata[:available] = audio[pos:]
+                remaining = frames - available
 
-                if self._is_overdubbing:
-                    self._is_overdubbing = False
-                    threading.Thread(target=self._finish_overdub, daemon=True).start()
-                elif self._overdub_pending:
-                    self._overdub_pending = False
-                    self._is_overdubbing  = True
+                if self._loop_stop:
+                    self._is_playing_audio = False
+                    self._loop_stop = False
                     threading.Thread(
-                        target=self._set_state, args=('OVERDUBBING',), daemon=True
+                        target=self._set_state, args=('IDLE',), daemon=True
                     ).start()
+                else:
+                    outdata[available:] = audio[:remaining]
+                    self._playback_pos[0] = remaining
+
+                    if self._is_overdubbing:
+                        self._is_overdubbing = False
+                        threading.Thread(target=self._finish_overdub, daemon=True).start()
+                    elif self._overdub_pending:
+                        self._overdub_pending = False
+                        self._is_overdubbing  = True
+                        threading.Thread(
+                            target=self._set_state, args=('OVERDUBBING',), daemon=True
+                        ).start()
+
+        # — Click (mezcla encima, funciona en cualquier estado) —
+        if self._click_audio is not None:
+            click     = self._click_audio
+            available = len(click) - self._click_pos
+            mix_len   = min(frames, available)
+            outdata[:mix_len] += click[self._click_pos:self._click_pos + mix_len]
+            self._click_pos += mix_len
+            if self._click_pos >= len(click):
+                self._click_audio = None
+                self._click_pos   = 0
 
     # ── Thread: countdown + recording ────────────────────────────────────
 
@@ -290,11 +310,7 @@ class SyncEngine:
                     return
 
                 beat_in_bar = i + 1
-                sound = self._accent if beat_in_bar == 1 else self._beat
-                try:
-                    sd.play(sound, SAMPLE_RATE)
-                except Exception as e:
-                    print(f"[SyncEngine] click error: {e}")
+                self.schedule_click(beat_in_bar == 1)
 
                 #self._fire_beat(beat_in_bar, 0) no se actualizara OLED
                 self._wait_until(anchor + (i + 1) * interval)
@@ -339,11 +355,7 @@ class SyncEngine:
 
             # Click durante grabación: solo si click_enabled
             if self.click_enabled:
-                sound = self._accent if beat_in_bar == 1 else self._beat
-                try:
-                    sd.play(sound, SAMPLE_RATE)
-                except Exception as e:
-                    print(f"[SyncEngine] click error: {e}")
+                self.schedule_click(beat_in_bar == 1)
 
             #self._fire_beat(beat_in_bar, bar_num) Intentamos que no haya conflicto con i2C ya no se actualizara OLED
             self._wait_until(anchor + (i + 1) * interval)

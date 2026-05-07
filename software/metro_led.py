@@ -1,7 +1,9 @@
 """
-Metrónomo visual con dos LEDs.
+Metrónomo visual con dos LEDs y click de audio opcional.
     LED_ACCENT (pin 23) → beat 1 del compás
     LED_BEAT   (pin 24) → beats 2..N
+El audio del click se delega en click_callback(is_accent) para usar
+el OutputStream del engine y evitar conflictos de dispositivo ALSA.
 """
 
 import threading
@@ -18,9 +20,11 @@ FLASH_DURATION = 0.04   # 40 ms de destello
 
 class MetroLed:
 
-    def __init__(self, bpm=120, beats_per_bar=4):
-        self.bpm           = bpm
-        self.beats_per_bar = beats_per_bar
+    def __init__(self, bpm=120, beats_per_bar=4, click_enabled=False, click_callback=None):
+        self.bpm            = bpm
+        self.beats_per_bar  = beats_per_bar
+        self.click_enabled  = click_enabled
+        self.click_callback = click_callback  # fn(is_accent: bool)
 
         self._led_accent = LED(PIN_ACCENT)
         self._led_beat   = LED(PIN_BEAT)
@@ -89,6 +93,12 @@ class MetroLed:
             else:
                 self._led_accent.off()
                 self._led_beat.on()
+
+            if self.click_enabled and self.click_callback:
+                try:
+                    self.click_callback(beat_in_bar == 1)
+                except Exception as e:
+                    print(f"[MetroLed] click error: {e}")
 
             self._wait_until(beat_time + FLASH_DURATION)
             self._led_accent.off()
