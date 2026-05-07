@@ -17,6 +17,7 @@ from threading import Event
 from .sync_engine    import SyncEngine
 from .oled_display   import OledDisplay
 from .buttons_manager import ButtonsManager
+from .metro_led      import MetroLed
 
 sd.default.device = 0   # Forzar AudioInjector
 
@@ -50,6 +51,7 @@ class SyncLooper:
 
         self.engine  = SyncEngine(self.bpm, self.beats_per_bar, self.total_bars)
         self.display = OledDisplay()
+        self.metro   = MetroLed(self.bpm, self.beats_per_bar)
 
         self.engine.on_state_change = self._on_engine_state
         #self.engine.on_beat         = self._on_beat Intentamos que no haya conflicto con i2C ya no se actualizara OLED 
@@ -85,10 +87,12 @@ class SyncLooper:
         print(f"[Main] Engine → {state}")
 
         if state == 'RECORDED':
-            # Clip listo: arrancar playback automáticamente
             import threading
             threading.Thread(target=self.engine.start_playing, daemon=True).start()
             return
+
+        if state == 'PLAYING':
+            self.metro.stop()
 
         self._app_state = state
         self._update_display()
@@ -137,7 +141,10 @@ class SyncLooper:
             return
         print(f"[Main] REC (estado={self._app_state})")
         self._last_beat = None
-        self.engine.start_recording()
+        if self.metro.running:
+            self.engine.start_recording(start_at=self.metro.next_bar_time())
+        else:
+            self.engine.start_recording()
 
     def _on_mute(self):
         if self._app_state == 'CONFIG':
@@ -151,6 +158,8 @@ class SyncLooper:
             self.engine.schedule_stop()
         elif self._app_state == 'IDLE' and self.engine.has_clip():
             self.engine.start_playing()
+        elif self._app_state == 'IDLE' and not self.engine.has_clip():
+            self._toggle_metro()
 
     def _on_stop(self):
         if self._app_state == 'CONFIG':
@@ -206,11 +215,21 @@ class SyncLooper:
             self.click_enabled = not self.click_enabled   # toggle ON/OFF
         self._update_display()
         
+    def _toggle_metro(self):
+        if self.metro.running:
+            self.metro.stop()
+        else:
+            self.metro.bpm           = self.bpm
+            self.metro.beats_per_bar = self.beats_per_bar
+            self.metro.start()
+
     def _apply_config(self):
         self.engine.bpm           = self.bpm
         self.engine.beats_per_bar = self.beats_per_bar
         self.engine.total_bars    = self.total_bars
         self.engine.click_enabled = self.click_enabled
+        self.metro.bpm            = self.bpm
+        self.metro.beats_per_bar  = self.beats_per_bar
         print(f"[Main] Config → {self.bpm}BPM {self.beats_per_bar}/4 {self.total_bars}bars")
 
     # ── Display ───────────────────────────────────────────────────────────
@@ -250,6 +269,7 @@ class SyncLooper:
     def _cleanup(self):
         print("[Main] Limpiando...")
         self.engine.close()
+        self.metro.close()
         self.display.clear()
         self.buttons.close()
         import subprocess

@@ -58,6 +58,8 @@ class SyncEngine:
         self._is_overdubbing   = False  # grabando overdub ahora mismo
         self._next_overdub     = False  # encolar otro overdub al terminar
 
+        self._record_start_at  = None  # sync con metro: anchor del beat 1
+
         self._input_stream = None
         self._output_stream    = None
         self._playback_audio   = None
@@ -114,11 +116,13 @@ class SyncEngine:
         )
         self._output_stream.start()
 
-    def start_recording(self):
-        """Para lo que haya en curso y lanza countdown → recording."""
+    def start_recording(self, start_at=None):
+        """Para lo que haya en curso y lanza countdown → recording.
+        start_at: tiempo absoluto (perf_counter) para sincronizar con metro LED."""
         self._stop_and_join()
         self._stop_event.clear()
-        self._recorded_audio = None
+        self._recorded_audio  = None
+        self._record_start_at = start_at
         self._thread = threading.Thread(
             target=self._run_countdown_then_record,
             daemon=True, name='sync-rec'
@@ -302,16 +306,28 @@ class SyncEngine:
                 return
 
         # === RECORDING ===
-        # Pre-alojar buffer de tamaño exacto + margen de 1s por jitter
+        # Pre-alojar buffer durante la espera para no perder tiempo al inicio
         total_samples = int(self.total_bars * bpb * interval * SAMPLE_RATE) + SAMPLE_RATE
         self._record_array = np.zeros((total_samples, CHANNELS), dtype=np.float32)
         self._record_pos   = 0
+
+        if self._record_start_at is not None:
+            # Esperar al beat 1 del metro LED
+            self._set_state('COUNTDOWN')
+            self._wait_until(self._record_start_at)
+            anchor = self._record_start_at
+            self._record_start_at = None
+            if self._stop_event.is_set():
+                self._record_array = None
+                self._set_state('IDLE')
+                return
+        else:
+            anchor = time.perf_counter()
 
         self._set_state('RECORDING')
         self._grabando = True
 
         total_beats = self.total_bars * bpb
-        anchor = time.perf_counter()
 
         for i in range(total_beats):
             if self._stop_event.is_set():
