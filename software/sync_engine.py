@@ -324,8 +324,12 @@ class SyncEngine:
         else:
             anchor = time.perf_counter()
 
-        self._set_state('RECORDING')
+        # Número exacto de muestras que debe tener el loop
+        expected_samples = int(self.total_bars * bpb * interval * SAMPLE_RATE)
+
+        # _grabando = True ANTES del set_state para que el OLED write no recorte el inicio
         self._grabando = True
+        self._set_state('RECORDING')
 
         total_beats = self.total_bars * bpb
 
@@ -354,13 +358,14 @@ class SyncEngine:
             self._set_state('IDLE')
             return
 
-        # Sin concatenaciones: el audio ya está en el buffer contiguo
+        # Tomar exactamente expected_samples del buffer (sin compensación de latencia):
+        # la latencia del input ya está "dentro" del anchor — si grabamos desde anchor
+        # el buffer tiene justo lo que necesitamos sin recortar.
         raw = self._record_array[:self._record_pos]
-        self._record_array = None  # liberar el buffer pre-alocado (con margen)
-        try:
-            latency_samples = int(self._input_stream.latency * SAMPLE_RATE)
-            self._recorded_audio = raw[latency_samples:].copy()
-        except Exception:
+        self._record_array = None
+        if len(raw) >= expected_samples:
+            self._recorded_audio = raw[:expected_samples].copy()
+        else:
             self._recorded_audio = raw.copy()
 
         # Notificar → main.py arrancará el playback
