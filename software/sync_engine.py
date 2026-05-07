@@ -163,8 +163,7 @@ class SyncEngine:
         self._next_overdub     = False
         self._overdub_array    = None
         self._stop_event.set()
-        self._stop_and_join()
-        self._set_state('IDLE')
+        self._set_state('IDLE')  # inmediato, sin bloquear
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -284,7 +283,6 @@ class SyncEngine:
 
             for i in range(bpb):
                 if self._stop_event.is_set():
-                    self._set_state('IDLE')
                     return
 
                 beat_in_bar = i + 1
@@ -294,11 +292,10 @@ class SyncEngine:
                 except Exception as e:
                     print(f"[SyncEngine] click error: {e}")
 
-                #self._fire_beat(beat_in_bar, 0) no se actualizara OLED 
+                #self._fire_beat(beat_in_bar, 0) no se actualizara OLED
                 self._wait_until(anchor + (i + 1) * interval)
-                
+
             if self._stop_event.is_set():
-                self._set_state('IDLE')
                 return
 
         # === RECORDING ===
@@ -335,7 +332,6 @@ class SyncEngine:
 
         if self._stop_event.is_set():
             self._record_array = None
-            self._set_state('IDLE')
             return
 
         # Sin concatenaciones: el audio ya está en el buffer contiguo
