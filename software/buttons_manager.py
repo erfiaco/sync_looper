@@ -21,7 +21,7 @@ class ButtonsManager:
         self.btn_rec    = Button(6,  pull_up=True, bounce_time=0.03)
         self.btn_mute   = Button(26, pull_up=True, bounce_time=0.03)
         self.btn_play   = Button(13, pull_up=True, bounce_time=0.03)
-        self.btn_stop   = Button(5,  pull_up=True, bounce_time=0.03, hold_time=3.0)
+        self.btn_stop   = Button(5,  pull_up=True, bounce_time=0.03, hold_time=2.0)
         self.btn_config = Button(25, pull_up=True, bounce_time=0.03, hold_time=2.0)
         self.btn_down   = Button(9,  pull_up=True, bounce_time=0.03)
         self.btn_up     = Button(22, pull_up=True, bounce_time=0.03)
