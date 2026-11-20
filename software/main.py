@@ -94,6 +94,9 @@ class SyncLooper:
 
         if state == 'PLAYING':
             self.metro.stop()
+            if self._app_state == 'IDLE':
+                print("[Main] PLAYING ignorado: ya estamos en IDLE (race condition evitada)")
+                return
 
         self._app_state = state
         self._update_display()
@@ -137,10 +140,10 @@ class SyncLooper:
     def _on_rec(self):
         if self._app_state == 'CONFIG':
             return
+        print(f"[Main] REC pulsado: app_state={self._app_state}, metro={self.metro.running}")
         if self._app_state in ('PLAYING', 'OVERDUBBING'):
             self.engine.schedule_overdub()
             return
-        print(f"[Main] REC (estado={self._app_state})")
         self._last_beat = None
         if self.metro.running:
             self.engine.start_recording(start_at=self.metro.next_bar_time())

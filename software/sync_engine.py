@@ -125,7 +125,9 @@ class SyncEngine:
         """Para lo que haya en curso y lanza countdown → recording.
         start_at: tiempo absoluto (perf_counter) para sincronizar con metro LED."""
         self._stop_and_join()
+        print(f"[SyncEngine] start_recording: stop_event={self._stop_event.is_set()} antes de clear")
         self._stop_event.clear()
+        print(f"[SyncEngine] start_recording: stop_event={self._stop_event.is_set()} después de clear")
         self._recorded_audio  = None
         self._record_start_at = start_at
         self._thread = threading.Thread(
@@ -135,8 +137,13 @@ class SyncEngine:
         self._thread.start()
 
     def start_playing(self):
+        print(f"[SyncEngine] start_playing: state={self._state}, recorded={'None' if self._recorded_audio is None else len(self._recorded_audio)}")
         if self._recorded_audio is None:
             return
+        with self._state_lock:
+            if self._state == 'IDLE':
+                print("[SyncEngine] start_playing abortado: stop_all ya activo")
+                return
         self._playback_audio      = self._recorded_audio
         self._playback_pos[0]     = 0
         self._loop_stop           = False
@@ -361,6 +368,7 @@ class SyncEngine:
             self._wait_until(anchor + (i + 1) * interval)
 
         self._grabando = False
+        print(f"[SyncEngine] grabación terminada: record_pos={self._record_pos}, stop={self._stop_event.is_set()}")
 
         if self._stop_event.is_set():
             self._record_array = None
